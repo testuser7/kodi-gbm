@@ -1,0 +1,10 @@
+<advancedsettings>
+    <services>
+        <esallinterfaces>true</esallinterfaces>
+        <webserver>true</webserver>
+        <webserverport>8008</webserverport>
+        <webserverauthentication>false</webserverauthentication>
+        <zeroconf>true</zeroconf>
+    </services>
+    <scanirserver>false</scanirserver>
+</advancedsettings>
