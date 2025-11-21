@@ -1,7 +1,7 @@
 FROM archlinux
 
 RUN pacman -Syu --noconfirm && \
-    pacman -S --noconfirm intel-media-driver kodi-gles kodi-addon-inputstream-adaptive
+    pacman -S --noconfirm intel-media-driver kodi-gles kodi-addon-inputstream-adaptive alsa-utils
 
 ADD advancedsettings.xml /root/.kodi/userdata/advancedsettings.xml
 
