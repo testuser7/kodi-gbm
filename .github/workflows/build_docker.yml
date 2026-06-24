@@ -4,7 +4,7 @@ on: workflow_dispatch
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
-  IMAGE_TAG: '21.3'
+  IMAGE_TAG: '22.0b1'
 
 jobs:
   build:
@@ -12,16 +12,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        os: [ubuntu-26.04, ubuntu-26.04-arm]
         platform: [linux/amd64]
         exclude:
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-26.04-arm
             platform: linux/amd64
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: read
+      contents: write
       packages: write
+      actions: write
+      security-events: write
     steps:
+      - name: Start Workflow Telemetry
+        uses: dev-hato/actions-workflow-metrics@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          interval_seconds: "30"
+
       - name: Prepare
         run: |
           platform=${{ matrix.platform }}
@@ -47,15 +55,74 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Restore cache
+        id: cache-restore
+        uses: actions/cache/restore@v6
+        with:
+          path: .build-cache
+          key: build-cache-${{ env.PLATFORM_PAIR }}
+
+      - name: Restore Docker cache mounts
+        uses: testuser7/buildkit-cache-dance@main
+        with:
+          builder: ${{ steps.setup-buildx.outputs.name }}
+          cache-map: |
+            {
+              ".build-cache/pacman-pkg": "/var/cache/pacman/pkg",
+              ".build-cache/pacman-sync": "/var/cache/pacman/sync",
+              ".build-cache/source": "/home/builder/source",
+              ".build-cache/kodi-src": "/home/builder/package/kodi/src",
+              ".build-cache/kodi-addon-inputstream-adaptive-src": "/home/builder/package/kodi-addon-inputstream-adaptive/src",
+              ".build-cache/.ccache": "/home/builder/.ccache"
+            }
+          skip-extraction: true
+
       - name: Build and push
         uses: docker/build-push-action@v7
         id: docker_build
         with:
           platforms: ${{ matrix.platform }}
+          pull: true
           provenance: false
+          sbom: true
           outputs: |
             type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-      
+          cache-from: |
+            type=gha,scope=build-cache-${{ env.PLATFORM_PAIR }}
+          cache-to: |
+            type=gha,mode=max,scope=build-cache-${{ env.PLATFORM_PAIR }}
+
+      - name: Restore Docker cache mounts
+        uses: testuser7/buildkit-cache-dance@main
+        if: always()
+        with:
+          builder: ${{ steps.setup-buildx.outputs.name }}
+          cache-map: |
+            {
+              ".build-cache/pacman-pkg": "/var/cache/pacman/pkg",
+              ".build-cache/pacman-sync": "/var/cache/pacman/sync",
+              ".build-cache/source": "/home/builder/source",
+              ".build-cache/kodi-src": "/home/builder/package/kodi/src",
+              ".build-cache/kodi-addon-inputstream-adaptive-src": "/home/builder/package/kodi-addon-inputstream-adaptive/src",
+              ".build-cache/.ccache": "/home/builder/.ccache"
+            }
+          extract: true
+
+      - name: Delete old cache
+        if: ${{ steps.cache-restore.outputs.cache-hit }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh cache delete "build-cache-${{ env.PLATFORM_PAIR }}"
+        continue-on-error: true
+
+      - name: Save cache
+        id: cache-save
+        uses: actions/cache/save@v6
+        if: always()
+        with:
+          path: .build-cache
+          key: build-cache-${{ env.PLATFORM_PAIR }}
+
       - name: Export digest
         run: |
           mkdir -p /tmp/digests
@@ -70,8 +137,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Analyze Vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: '${{ env.IMAGE_NAME }}@${{ steps.docker_build.outputs.digest }}'
+          format: 'sarif'
+          output: 'trivy-${{ env.PLATFORM_PAIR }}-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          scanners: 'vuln,license'
+
+      - name: Upload SARIF result to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'trivy-${{ env.PLATFORM_PAIR }}-results.sarif'
+
   merge:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write
@@ -107,7 +189,3 @@ jobs:
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
-      
-      - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}

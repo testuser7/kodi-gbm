@@ -1,0 +1,48 @@
+# Maintainer: BlackIkeEagle <ike DOT devolder AT gmail DOT com>
+# Contributor: Cedric Girard <cgirard.archlinux@valinor.fr>
+# Contributor: kevku <kevku@gmx.com>
+
+pkgname=kodi-addon-inputstream-adaptive
+pkgver=22.3.17
+_codename=Piers
+pkgrel=1
+pkgdesc="InputStream client for adaptive streams for Kodi 18+"
+arch=('x86_64')
+url="https://github.com/peak3d/inputstream.adaptive"
+license=('GPL-2.0-or-later')
+groups=('kodi-addons' 'kodi-addons-inputstream')
+makedepends=('cmake' 'kodi-dev' 'gtest' 'nlohmann-json' 'pugixml' 'mold' 'ninja')
+options=(!lto strip !debug)
+
+_bento4_version="1.6.0-641-5"
+
+source=("$pkgname-$pkgver.tar.gz::https://github.com/peak3d/inputstream.adaptive/archive/$pkgver-$_codename.tar.gz"
+        "$pkgname-bento4-$_bento4_version.tar.gz::https://github.com/xbmc/Bento4/archive/refs/tags/$_bento4_version-$_codename.tar.gz"
+    )
+noextract=("$pkgname-bento4-$_bento4_version.tar.gz")
+sha512sums=('1db63992fb22c27348e97806e12f47e5acca548ad5d5254f12cec3ee2c430c95680b21c7f8122fc67bba40df6ca64c30586c1b9923394ab8d3d9ac17c7644aad'
+            '10f7fa9b343841ac841fc13a0225ef16ff65bebbe0da571da255c02ad94a6cb99a4ad20871aaf117a65e837ac934ddf70132afd1e28cb2f0060fed1aad74fd81')
+
+#prepare() {
+    #cd "inputstream.adaptive-$pkgver-$_codename"
+#}
+
+build() {
+    cd "inputstream.adaptive-$pkgver-$_codename"
+    cmake \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_MOLD=ON \
+        -DBUILD_SHARED_LIBS=1 \
+        -DUSE_LTO=1 \
+        -DENABLE_INTERNAL_BENTO4=1 \
+        -DBENTO4_URL="$srcdir/$pkgname-bento4-$_bento4_version.tar.gz" \
+        .
+    ninja
+}
+
+package() {
+    depends=('kodi' 'kodi-platform' 'pugixml')
+    cd "inputstream.adaptive-$pkgver-$_codename"
+    DESTDIR="$pkgdir/" ninja install
+}

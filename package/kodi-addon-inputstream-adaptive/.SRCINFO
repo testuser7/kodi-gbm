@@ -1,0 +1,25 @@
+pkgbase = kodi-addon-inputstream-adaptive
+	pkgdesc = InputStream client for adaptive streams for Kodi 18+
+	pkgver = 22.3.17
+	pkgrel = 1
+	url = https://github.com/peak3d/inputstream.adaptive
+	arch = x86_64
+	groups = kodi-addons
+	groups = kodi-addons-inputstream
+	license = GPL-2.0-or-later
+	makedepends = cmake
+	makedepends = kodi-dev
+	makedepends = gtest
+	makedepends = nlohmann-json
+	makedepends = pugixml
+	noextract = kodi-addon-inputstream-adaptive-bento4-1.6.0-641-5.tar.gz
+	options = !lto
+	source = kodi-addon-inputstream-adaptive-22.3.17.tar.gz::https://github.com/peak3d/inputstream.adaptive/archive/22.3.17-Piers.tar.gz
+	source = kodi-addon-inputstream-adaptive-bento4-1.6.0-641-5.tar.gz::https://github.com/xbmc/Bento4/archive/refs/tags/1.6.0-641-5-Piers.tar.gz
+	sha512sums = 1db63992fb22c27348e97806e12f47e5acca548ad5d5254f12cec3ee2c430c95680b21c7f8122fc67bba40df6ca64c30586c1b9923394ab8d3d9ac17c7644aad
+	sha512sums = 10f7fa9b343841ac841fc13a0225ef16ff65bebbe0da571da255c02ad94a6cb99a4ad20871aaf117a65e837ac934ddf70132afd1e28cb2f0060fed1aad74fd81
+
+pkgname = kodi-addon-inputstream-adaptive
+	depends = kodi
+	depends = kodi-platform
+	depends = pugixml

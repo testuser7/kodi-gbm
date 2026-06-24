@@ -1,0 +1,4 @@
+[kodi]
+source = "git"
+git = "https://github.com/xbmc/xbmc.git"
+exclude_regex = "[0-9]+.[0-9]+(a|b|rc).*"
