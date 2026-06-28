@@ -52,7 +52,7 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
 
 FROM archlinux:base
 
-COPY --chmod=666 advancedsettings.xml /usr/share/kodi/userdata/advancedsettings.xml.template
+COPY advancedsettings.xml /usr/share/kodi/userdata/advancedsettings.xml.template
 
 RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
     --mount=type=cache,target=/var/cache/pacman/sync,sharing=locked \
@@ -62,7 +62,7 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
     pacman -U --noconfirm /tmp/package/kodi/kodi-gbm-*.pkg.tar \
     /tmp/package/kodi-addon-inputstream-adaptive/kodi-addon-inputstream-adaptive-*.pkg.tar && \
     rm -f /var/log/pacman.log && \
-    useradd kodi && mkdir /.kodi && chown kodi:kodi /.kodi && chmod 777 /.kodi
+    useradd kodi && mkdir /.kodi && chown kodi:kodi /.kodi
 
 USER kodi
 

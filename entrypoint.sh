@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [ ! -f /home/kodi/.kodi/userdata/advancedsettings.xml ]; then
+if [ ! -f /.kodi/userdata/advancedsettings.xml ]; then
     install -D /usr/share/kodi/userdata/advancedsettings.xml.template /.kodi/userdata/advancedsettings.xml
 fi
 
