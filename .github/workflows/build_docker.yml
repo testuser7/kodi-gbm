@@ -5,6 +5,7 @@ on: workflow_dispatch
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
   IMAGE_TAG: '22.0b1'
+  KODI_NAME: 'Piers'
 
 jobs:
   build:
@@ -42,7 +43,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          tags: ${{ env.IMAGE_TAG }}
+          tags: ${{ env.IMAGE_TAG }}-deb
           images: ${{ env.IMAGE_NAME }}
 
       - name: Set up Docker Buildx
@@ -68,12 +69,10 @@ jobs:
           builder: ${{ steps.setup-buildx.outputs.name }}
           cache-map: |
             {
-              ".build-cache/pacman-pkg": "/var/cache/pacman/pkg",
-              ".build-cache/pacman-sync": "/var/cache/pacman/sync",
-              ".build-cache/source": "/home/builder/source",
-              ".build-cache/kodi-src": "/home/builder/package/kodi/src",
-              ".build-cache/kodi-addon-inputstream-adaptive-src": "/home/builder/package/kodi-addon-inputstream-adaptive/src",
-              ".build-cache/.ccache": "/home/builder/.ccache"
+              ".build-cache/apt": "/var/cache/apt",
+              ".build-cache/apt-lists": "/var/lib/apt/lists",
+              ".build-cache/kodi-download": {"target": "/var/cache/kodi-download","uid": "1000","gid": "1000"},
+              ".build-cache/ccache": {"target": "/var/cache/ccache","uid": "1000","gid": "1000"}
             }
           skip-extraction: true
 
@@ -81,7 +80,7 @@ jobs:
         uses: docker/build-push-action@v7
         id: docker_build
         with:
-          platforms: ${{ matrix.platform }}
+          load: true
           pull: true
           provenance: false
           sbom: true
@@ -91,20 +90,21 @@ jobs:
             type=gha,scope=build-cache-${{ env.PLATFORM_PAIR }}
           cache-to: |
             type=gha,mode=max,scope=build-cache-${{ env.PLATFORM_PAIR }}
+          build-args: |
+            KODI_VERSION=${{ env.IMAGE_TAG }}
+            KODI_NAME=${{ env.KODI_NAME }}
 
-      - name: Restore Docker cache mounts
+      - name: Extract Docker cache mounts
         uses: testuser7/buildkit-cache-dance@main
         if: always()
         with:
           builder: ${{ steps.setup-buildx.outputs.name }}
           cache-map: |
             {
-              ".build-cache/pacman-pkg": "/var/cache/pacman/pkg",
-              ".build-cache/pacman-sync": "/var/cache/pacman/sync",
-              ".build-cache/source": "/home/builder/source",
-              ".build-cache/kodi-src": "/home/builder/package/kodi/src",
-              ".build-cache/kodi-addon-inputstream-adaptive-src": "/home/builder/package/kodi-addon-inputstream-adaptive/src",
-              ".build-cache/.ccache": "/home/builder/.ccache"
+              ".build-cache/apt": "/var/cache/apt",
+              ".build-cache/apt-lists": "/var/lib/apt/lists",
+              ".build-cache/kodi-download": {"target": "/var/cache/kodi-download","uid": "1000","gid": "1000"},
+              ".build-cache/ccache": {"target": "/var/cache/ccache","uid": "1000","gid": "1000"}
             }
           extract: true
 
@@ -174,7 +174,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          tags: ${{ env.IMAGE_TAG }}
+          tags: ${{ env.IMAGE_TAG }}-deb
           images: ${{ env.IMAGE_NAME }}
       
       - name: Login to GitHub Container Registry
