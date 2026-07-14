@@ -1,0 +1,77 @@
+diff --git a/addons/resource.language.en_gb/resources/strings.po b/addons/resource.language.en_gb/resources/strings.po
+index 84957f056f..40cc48cb89 100644
+--- a/addons/resource.language.en_gb/resources/strings.po
++++ b/addons/resource.language.en_gb/resources/strings.po
+@@ -25065,3 +25065,9 @@ msgstr ""
+ msgctxt "#40802"
+ msgid "If enabled, a confirmation dialog will be displayed when files shall be deleted. If disabled, files will be deleted without user confirmation."
+ msgstr ""
++
++#. Description of setting with label #246 "Monitor"
++#: system/settings/settings.xml
++msgctxt "#40803"
++msgid "Monitor change requires restart in GBM mode."
++msgstr ""
+diff --git a/system/settings/settings.xml b/system/settings/settings.xml
+index 0da8ccd30e..8efba0f51c 100755
+--- a/system/settings/settings.xml
++++ b/system/settings/settings.xml
+@@ -2787,7 +2787,7 @@
+   <section id="system" label="13000" help="36349">
+     <category id="display" label="14220" help="36603">
+       <group id="1" label="16000">
+-        <setting id="videoscreen.monitor" type="string" label="246" help="">
++        <setting id="videoscreen.monitor" type="string" label="246" help="40803">
+           <requirement>
+             <or>
+               <condition>HAVE_X11</condition>
+@@ -2804,7 +2804,12 @@
+             <options>monitors</options>
+           </constraints>
+           <dependencies>
+-            <dependency type="enable" on="property" name="SupportsScreenMove" />
++            <dependency type="enable">
++              <or>
++                <condition on="property" name="SupportsScreenMove" />
++                <condition on="property" name="HasMultipleMonitors" />
++              </or>
++            </dependency>
+             <dependency type="update" setting="videoscreen.screenmode" />
+           </dependencies>
+           <control type="spinner" format="string" delayed="true" />
+diff --git a/xbmc/settings/SettingConditions.cpp b/xbmc/settings/SettingConditions.cpp
+index 45dee9ee2e..7badd0a058 100644
+--- a/xbmc/settings/SettingConditions.cpp
++++ b/xbmc/settings/SettingConditions.cpp
+@@ -102,6 +103,13 @@ bool HasSystemSdrPeakLuminance(const std::string& /*condition*/,
+   return CServiceBroker::GetWinSystem()->HasSystemSdrPeakLuminance();
+ }
+ 
++bool HasMultipleMonitors(const std::string& /*condition*/,
++                         const std::string& /*value*/,
++                         const SettingConstPtr& /*setting*/)
++{
++  return CServiceBroker::GetWinSystem()->GetConnectedOutputs().size() > 1;
++}
++
+ bool SupportsVideoSuperResolution(const std::string& /*condition*/,
+                                   const std::string& /*value*/,
+                                   const SettingConstPtr& /*setting*/)
+@@ -357,6 +367,9 @@ void CSettingConditions::Initialize()
+ #ifdef HAVE_WAYLAND
+   m_simpleConditions.emplace("have_wayland");
+ #endif
++#ifdef HAVE_GBM
++  m_simpleConditions.emplace("have_gbm");
++#endif
+ #ifdef HAS_GL
+   m_simpleConditions.emplace("has_gl");
+ #endif
+@@ -450,6 +463,7 @@ void CSettingConditions::Initialize()
+   m_complexConditions.try_emplace("hasrumblecontroller", HasRumbleController);
+   m_complexConditions.try_emplace("haspowerofffeature", HasPowerOffFeature);
+   m_complexConditions.try_emplace("hassystemsdrpeakluminance", HasSystemSdrPeakLuminance);
++  m_complexConditions.try_emplace("hasmultiplemonitors", HasMultipleMonitors);
+   m_complexConditions.try_emplace("supportsscreenmove", SupportsScreenMove);
+   m_complexConditions.try_emplace("supportsvideosuperresolution", SupportsVideoSuperResolution);
+   m_complexConditions.try_emplace("supportsdolbyvision", SupportsDolbyVision);

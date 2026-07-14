@@ -1,10 +1,4 @@
 <advancedsettings>
-    <powermanagement>
-        <powerdown>false</powerdown>
-        <reboot>true</reboot>
-        <suspend>false</suspend>
-        <hibernate>false</hibernate>
-    </powermanagement>
     <services>
         <esallinterfaces>true</esallinterfaces>
         <webserver>true</webserver>

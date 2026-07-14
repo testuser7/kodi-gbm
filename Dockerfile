@@ -14,14 +14,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ccache \
     cmake \
     default-jre \
-    gawk \
     gettext \
     git \
     gperf \
     libasound2-dev \
     libass-dev \
     libbluray-dev \
-    libcdio++-dev \
     libcec-dev \
     libcurl4-openssl-dev \
     libdav1d-dev \
@@ -32,9 +30,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libgbm-dev \
     libgcrypt20-dev \
     libgif-dev \
-    libgles2-mesa-dev \
+    libgl-dev \
     libinput-dev \
-    libiso9660-dev \
     libjpeg62-turbo-dev \
     libkissfft-dev \
     liblcms2-dev \
@@ -54,7 +51,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libva-dev \
     libxkbcommon-dev \
     libxslt1-dev \
-    lsb-release \
     mold \
     meson \
     nasm \
@@ -67,10 +63,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 USER builder
 
-ENV CCACHE_DIR=/var/cache/ccache
-ENV CMAKE_INSTALL_DO_STRIP=1 
+WORKDIR /home/builder
 
-RUN git clone --branch ${KODI_VERSION}-${KODI_NAME} --depth 1 https://github.com/xbmc/xbmc.git /home/builder/kodi
+ENV CCACHE_DIR=/var/cache/ccache
+ENV CMAKE_INSTALL_DO_STRIP=1
+
+COPY disable_power_menu.patch .
+COPY gbm_win.patch .
+
+RUN git clone --branch ${KODI_VERSION}-${KODI_NAME} --depth 1 https://github.com/xbmc/xbmc.git kodi && \
+    git -C kodi apply ../disable_power_menu.patch && \
+    git -C kodi apply ../gbm_win.patch
+
 
 WORKDIR /home/builder/kodi-build
 
@@ -82,7 +86,8 @@ RUN --mount=type=cache,target=/var/cache/kodi-download,uid=1000,gid=1000 \
         -DCMAKE_CXX_FLAGS="-w" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCORE_PLATFORM_NAME=gbm \
-        -DAPP_RENDER_SYSTEM=gles \
+        -DAPP_RENDER_SYSTEM=gl \
+        -DUSE_LTO=ON \
         -DENABLE_INTERNAL_FFMPEG=ON \
         -DENABLE_INTERNAL_CROSSGUID=ON \
         -DENABLE_INTERNAL_FLATBUFFERS=ON \
@@ -90,11 +95,14 @@ RUN --mount=type=cache,target=/var/cache/kodi-download,uid=1000,gid=1000 \
         -DENABLE_ALSA=ON \
         -DENABLE_AVAHI=OFF \
         -DENABLE_BLURAY=ON \
+        -DENABLE_CAP=OFF \
         -DENABLE_CEC=ON \
         -DENABLE_DBUS=OFF \
         -DENABLE_DVDCSS=ON \
         -DENABLE_EGL=ON \
         -DENABLE_EVENTCLIENTS=ON \
+        -DENABLE_ISO9660PP=OFF \
+        -DENABLE_MARIADBCLIENT=OFF \
         -DENABLE_MDNS=OFF \
         -DENABLE_MICROHTTPD=ON \
         -DENABLE_MOLD=ON \
@@ -104,7 +112,8 @@ RUN --mount=type=cache,target=/var/cache/kodi-download,uid=1000,gid=1000 \
         -DENABLE_PLIST=OFF \
         -DENABLE_SMBCLIENT=ON \
         -DENABLE_SNDIO=OFF \
-        -DENABLE_UDEV=ON \
+        -DENABLE_UDEV=OFF \
+        -DENABLE_UDFREAD=ON \
         -DENABLE_UPNP=OFF \
         -DENABLE_VAAPI=ON \
         -DENABLE_VDPAU=OFF \
@@ -126,14 +135,21 @@ WORKDIR /home/builder/addons-build
 RUN cmake ../kodi/cmake/addons \
         -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DCMAKE_C_FLAGS="-w" \
         -DCMAKE_CXX_FLAGS="-w" \
+        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
         -DADDONS_TO_BUILD="inputstream.adaptive" \
         -DCORE_SOURCE_DIR=/home/builder/kodi \
         -DPACKAGE_ZIP=OFF
 
 RUN --mount=type=cache,target=/var/cache/ccache,uid=1000,gid=1000 \
     cmake --build . -j$(nproc)
+
+RUN cp -r /home/builder/addons-build/build/depends/lib/* /tmp/kodi-build/usr/local/lib/ && \
+    cp -r /home/builder/addons-build/build/depends/share/* /tmp/kodi-build/usr/local/share/ && \
+    rm -rf /tmp/kodi-build/usr/local/include
 
 RUN --mount=type=cache,target=/var/cache/ccache,uid=1000,gid=1000 \
     ccache -p && ccache -s
@@ -144,15 +160,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     apt update && apt install -y --no-install-recommends \
+    ca-certificates \
     intel-media-va-driver \
     libasound2t64 \
     libass9 \
     libbluray2 \
-    libcdio++1t64 \
     libcec7 \
     libcurl4t64 \
     libdate-tz3 \
     libdav1d7 \
+    libdbus-1-3 \
     libdisplay-info2 \
     libegl1 \
     libexiv2-28 \
@@ -160,9 +177,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libfstrcmp0 \
     libgbm1 \
     libgif7 \
-    libgles2 \
+    libgl1 \
+    libgl1-mesa-dri \
     libinput10 \
-    libiso9660-12 \
     libkissfft-float131 \
     liblzo2-2 \
     libmicrohttpd12t64 \
@@ -180,26 +197,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libva-x11-2 \
     libxkbcommon0 \
     libxslt1.1 \
+    mesa-va-drivers \
     python3-pil \
     python3-pycryptodome && \
     rm -f /var/log/dpkg.log /var/log/apt/*.log && \
-    useradd kodi && mkdir /.kodi && chown kodi:kodi /.kodi
+    useradd -u 568 -U kodi && \
+    mkdir /.kodi && chown kodi:kodi /.kodi 
 
-COPY --from=builder /tmp/kodi-build/usr/local/bin/ /usr/local/bin/
-COPY --from=builder /tmp/kodi-build/usr/local/lib/ /usr/local/lib/
-COPY --from=builder /tmp/kodi-build/usr/local/share/ /usr/local/share/
-COPY --from=builder /home/builder/addons-build/build/depends/lib/ /usr/local/lib/
-COPY --from=builder /home/builder/addons-build/build/depends/share/ /usr/local/share/
+COPY --from=builder /tmp/kodi-build/usr/local/ /usr/local/
 COPY advancedsettings.xml /usr/local/share/kodi/userdata/advancedsettings.xml.template
-
-USER kodi
-
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENV KODI_DATA="/.kodi" \
-    CRASHLOG_DIR="/tmp" \
-    KODI_TEMP="/tmp/.kodi/temp" \
-    XDG_CACHE_HOME="/tmp/.cache"
+    CRASHLOG_DIR="/var/tmp" \
+    KODI_TEMP="/var/tmp/.kodi/temp" \
+    XDG_CACHE_HOME="/var/tmp/.cache" \
+    HOME="/mnt"
 
 EXPOSE 8080
 EXPOSE 9090
