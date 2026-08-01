@@ -1,8 +1,8 @@
 diff --git a/addons/resource.language.en_gb/resources/strings.po b/addons/resource.language.en_gb/resources/strings.po
-index 84957f056f..40cc48cb89 100644
+index c7d72e66e6..baa572aef7 100644
 --- a/addons/resource.language.en_gb/resources/strings.po
 +++ b/addons/resource.language.en_gb/resources/strings.po
-@@ -25065,3 +25065,9 @@ msgstr ""
+@@ -24984,3 +24984,9 @@ msgstr ""
  msgctxt "#40802"
  msgid "If enabled, a confirmation dialog will be displayed when files shall be deleted. If disabled, files will be deleted without user confirmation."
  msgstr ""
@@ -10,7 +10,7 @@ index 84957f056f..40cc48cb89 100644
 +#. Description of setting with label #246 "Monitor"
 +#: system/settings/settings.xml
 +msgctxt "#40803"
-+msgid "Monitor change requires restart in GBM mode."
++msgid "Monitor change may require restart."
 +msgstr ""
 diff --git a/system/settings/settings.xml b/system/settings/settings.xml
 index 0da8ccd30e..8efba0f51c 100755
@@ -39,11 +39,215 @@ index 0da8ccd30e..8efba0f51c 100755
              <dependency type="update" setting="videoscreen.screenmode" />
            </dependencies>
            <control type="spinner" format="string" delayed="true" />
+diff --git a/xbmc/cores/AudioEngine/Sinks/AESinkALSA.cpp b/xbmc/cores/AudioEngine/Sinks/AESinkALSA.cpp
+index 0a7f162f2f..734bc334b9 100644
+--- a/xbmc/cores/AudioEngine/Sinks/AESinkALSA.cpp
++++ b/xbmc/cores/AudioEngine/Sinks/AESinkALSA.cpp
+@@ -78,6 +78,11 @@ struct SndConfigDeleter
+   void operator()(snd_config_t* p) { snd_config_delete(p); }
+ };
+ 
++struct SndChmapDeleter
++{
++  void operator()(snd_pcm_chmap_t* p) { free(p); }
++};
++
+ inline std::unique_ptr<snd_config_t, SndConfigDeleter> SndConfigCopy(snd_config_t* original)
+ {
+   snd_config_t* config;
+@@ -196,14 +201,48 @@ inline CAEChannelInfo CAESinkALSA::GetChannelLayout(const AEAudioFormat& format,
+   }
+   else
+   {
+-    /* ask for the actual map */
+-    snd_pcm_chmap_t* actualMap = snd_pcm_get_chmap(m_pcm);
++    /* The HDMI ELD is frequently not available yet the instant the device is
++     * opened, so ALSA reports an all-UNKNOWN channel map. Wait briefly for the
++     * real map instead of immediately falling back to a guessed legacy layout,
++     * which would otherwise leave the sink with a wrong channel assignment until
++     * the device is reopened (e.g. by a manual channel switch). */
++    snd_pcm_chmap_t* rawMap = nullptr;
++    for (int attempt = 0; attempt < 30; ++attempt)
++    {
++      snd_pcm_chmap_t* probe = snd_pcm_get_chmap(m_pcm);
++      if (!probe)
++        break; // device has no channel map support; use legacy layout
++
++      if (ALSAchmapToAEChannelMap(probe).IsLayoutValid())
++      {
++        rawMap = probe;
++        break;
++      }
++      // Reported an all-UNKNOWN map: the HDMI ELD is not ready yet. Release and
++      // retry shortly rather than falling back to a guessed legacy layout.
++      free(probe);
++      KODI::TIME::Sleep(50ms);
++    }
++
++    std::unique_ptr<snd_pcm_chmap_t, SndChmapDeleter> actualMap{rawMap};
+     if (actualMap)
+     {
+-      alsaMapStr = ALSAchmapToString(actualMap);
++      alsaMapStr = ALSAchmapToString(actualMap.get());
+ 
+-      info = ALSAchmapToAEChannelMap(actualMap);
++      info = ALSAchmapToAEChannelMap(actualMap.get());
+ 
++      /* ALSA may report UNKNOWN at init; recovered once RUNNING. */
++      if (!info.IsLayoutValid())
++      {
++        CLog::Log(LOGINFO,
++                  "CAESinkALSA::GetChannelLayout - device reported no usable channel "
++                  "map (ALSA: {}); falling back to legacy layout",
++                  alsaMapStr);
++        alsaMapStr = "none (fallback to legacy)";
++        info = GetChannelLayoutLegacy(format, channels, channels);
++      }
++      else
++      {
+       /* "fake" a compatible map if it is more suitable for AE */
+       if (!info.ContainsChannels(format.m_channelLayout))
+       {
+@@ -222,7 +261,7 @@ inline CAEChannelInfo CAESinkALSA::GetChannelLayout(const AEAudioFormat& format,
+       while (info.Count() < channels)
+         info += AE_CH_UNKNOWN1;
+ 
+-      free(actualMap);
++      }
+     }
+     else
+     {
+@@ -473,6 +512,55 @@ snd_pcm_chmap_t* CAESinkALSA::SelectALSAChannelMap(const CAEChannelInfo& info)
+   return chmap;
+ }
+ 
++bool CAESinkALSA::ChmapHasTrailingPhantom(snd_pcm_chmap_t* map)
++{
++  if (!map || map->channels == 0)
++    return false;
++  unsigned int last = map->pos[map->channels - 1];
++  return last == SND_CHMAP_UNKNOWN || last == SND_CHMAP_NA;
++}
++
++snd_pcm_chmap_t* CAESinkALSA::SelectFullLayoutChmap(const CAEChannelInfo& info)
++{
++  snd_pcm_chmap_query_t** supportedMaps = snd_pcm_query_chmaps(m_pcm);
++  if (!supportedMaps)
++    return NULL;
++
++  snd_pcm_chmap_t* best = NULL;
++  unsigned int bestChannels = 0;
++
++  int i = 0;
++  for (snd_pcm_chmap_query_t* supportedMap = supportedMaps[i++];
++       supportedMap; supportedMap = supportedMaps[i++])
++  {
++    snd_pcm_chmap_t* map = &supportedMap->map;
++    CLog::Log(LOGDEBUG, "CAESinkALSA::SelectFullLayoutChmap - supported {} (phantom: {})",
++              ALSAchmapToString(map), ChmapHasTrailingPhantom(map) ? "yes" : "no");
++
++    /* skip layouts with a trailing phantom channel (ELD padding) */
++    if (ChmapHasTrailingPhantom(map))
++      continue;
++
++    CAEChannelInfo candidate = ALSAchmapToAEChannelMap(map);
++    if (!candidate.ContainsChannels(info))
++      continue;
++
++    if (map->channels > bestChannels)
++    {
++      bestChannels = map->channels;
++      free(best);
++      best = CopyALSAchmap(map);
++    }
++  }
++
++  CLog::Log(LOGDEBUG, "CAESinkALSA::SelectFullLayoutChmap - chose \"{}\" for layout {}",
++            best ? ALSAchmapToString(best) : std::string("none"),
++            std::string(info));
++
++  snd_pcm_free_chmaps(supportedMaps);
++  return best;
++}
++
+ void CAESinkALSA::GetAESParams(const AEAudioFormat& format, std::string& params)
+ {
+   if (m_passthrough)
+@@ -557,6 +645,38 @@ bool CAESinkALSA::Initialize(AEAudioFormat &format, std::string &device)
+     selectedChmap = SelectALSAChannelMap(format.m_channelLayout);
+     if (selectedChmap)
+     {
++      CLog::Log(LOGDEBUG, "CAESinkALSA::Initialize - selected chmap \"{}\" (phantom: {}) for layout {}",
++                ALSAchmapToString(selectedChmap),
++                ChmapHasTrailingPhantom(selectedChmap) ? "yes" : "no",
++                std::string(format.m_channelLayout));
++
++      /* Some HDMI sinks render short even-count PCM streams incorrectly: a
++       * 4-channel 2.1 stream is garbled / white-noise, while the sink's full
++       * layout (e.g. a 6-channel 5.1 map) is rendered cleanly. This happens when
++       * the ELD reports a trailing phantom UNKNOWN channel, so a 2.1 request opens
++       * as FL,FR,LFE,UNKNOWN instead of the complete layout and the LFE ends up in
++       * a non-standard position. When the selected map has such a phantom channel
++       * and the requested layout carries an LFE, open the sink's complete layout
++       * instead and let the surplus channels be silenced. This keeps the LFE in its
++       * standard CA position (index 3 for a 5.1 layout) which the sink expects. */
++      if (ChmapHasTrailingPhantom(selectedChmap) &&
++          format.m_channelLayout.HasChannel(AE_CH_LFE))
++      {
++        snd_pcm_chmap_t* fullChmap = SelectFullLayoutChmap(format.m_channelLayout);
++        if (fullChmap)
++        {
++          CLog::Log(LOGDEBUG, "CAESinkALSA::Initialize - upgrading to full layout \"{}\"",
++                    ALSAchmapToString(fullChmap));
++          free(selectedChmap);
++          selectedChmap = fullChmap;
++        }
++        else
++        {
++          CLog::Log(LOGDEBUG, "CAESinkALSA::Initialize - no full layout available, keeping \"{}\"",
++                    ALSAchmapToString(selectedChmap));
++        }
++      }
++
+       /* update wanted channel count according to the selected map */
+       inconfig.channels = selectedChmap->channels;
+     }
+@@ -570,8 +690,15 @@ bool CAESinkALSA::Initialize(AEAudioFormat &format, std::string &device)
+ 
+   if (selectedChmap)
+   {
+-    /* failure is OK, that likely just means the selected chmap is fixed already */
+-    snd_pcm_set_chmap(m_pcm, selectedChmap);
++    int chmapRet = snd_pcm_set_chmap(m_pcm, selectedChmap);
++    if (chmapRet < 0)
++      CLog::Log(LOGDEBUG,
++                "CAESinkALSA::Initialize - snd_pcm_set_chmap failed ({}), the device "
++                "map is likely fixed; transmitted layout may keep phantom channels",
++                snd_strerror(chmapRet));
++    else
++      CLog::Log(LOGDEBUG, "CAESinkALSA::Initialize - set channel map to \"{}\"",
++                ALSAchmapToString(selectedChmap));
+     free(selectedChmap);
+   }
+ 
+diff --git a/xbmc/cores/AudioEngine/Sinks/AESinkALSA.h b/xbmc/cores/AudioEngine/Sinks/AESinkALSA.h
+index 90c532176d..b8a9b8d7f9 100644
+--- a/xbmc/cores/AudioEngine/Sinks/AESinkALSA.h
++++ b/xbmc/cores/AudioEngine/Sinks/AESinkALSA.h
+@@ -53,6 +53,8 @@ private:
+   static std::string ALSAchmapToString(snd_pcm_chmap_t* alsaMap);
+   static CAEChannelInfo GetAlternateLayoutForm(const CAEChannelInfo& info);
+   snd_pcm_chmap_t* SelectALSAChannelMap(const CAEChannelInfo& info);
++  static bool ChmapHasTrailingPhantom(snd_pcm_chmap_t* map);
++  snd_pcm_chmap_t* SelectFullLayoutChmap(const CAEChannelInfo& info);
+ 
+   void GetAESParams(const AEAudioFormat& format, std::string& params);
+   void HandleError(const char* name, int err);
 diff --git a/xbmc/settings/SettingConditions.cpp b/xbmc/settings/SettingConditions.cpp
-index 45dee9ee2e..7badd0a058 100644
+index 45dee9ee2e..d37204319c 100644
 --- a/xbmc/settings/SettingConditions.cpp
 +++ b/xbmc/settings/SettingConditions.cpp
-@@ -102,6 +103,13 @@ bool HasSystemSdrPeakLuminance(const std::string& /*condition*/,
+@@ -102,6 +102,13 @@ bool HasSystemSdrPeakLuminance(const std::string& /*condition*/,
    return CServiceBroker::GetWinSystem()->HasSystemSdrPeakLuminance();
  }
  
@@ -51,13 +255,13 @@ index 45dee9ee2e..7badd0a058 100644
 +                         const std::string& /*value*/,
 +                         const SettingConstPtr& /*setting*/)
 +{
-+  return CServiceBroker::GetWinSystem()->GetConnectedOutputs().size() > 1;
++  return CServiceBroker::GetWinSystem()->GetPhysicalOutputCount() > 1;
 +}
 +
  bool SupportsVideoSuperResolution(const std::string& /*condition*/,
                                    const std::string& /*value*/,
                                    const SettingConstPtr& /*setting*/)
-@@ -357,6 +367,9 @@ void CSettingConditions::Initialize()
+@@ -357,6 +364,9 @@ void CSettingConditions::Initialize()
  #ifdef HAVE_WAYLAND
    m_simpleConditions.emplace("have_wayland");
  #endif
@@ -67,7 +271,7 @@ index 45dee9ee2e..7badd0a058 100644
  #ifdef HAS_GL
    m_simpleConditions.emplace("has_gl");
  #endif
-@@ -450,6 +463,7 @@ void CSettingConditions::Initialize()
+@@ -450,6 +460,7 @@ void CSettingConditions::Initialize()
    m_complexConditions.try_emplace("hasrumblecontroller", HasRumbleController);
    m_complexConditions.try_emplace("haspowerofffeature", HasPowerOffFeature);
    m_complexConditions.try_emplace("hassystemsdrpeakluminance", HasSystemSdrPeakLuminance);
@@ -75,3 +279,213 @@ index 45dee9ee2e..7badd0a058 100644
    m_complexConditions.try_emplace("supportsscreenmove", SupportsScreenMove);
    m_complexConditions.try_emplace("supportsvideosuperresolution", SupportsVideoSuperResolution);
    m_complexConditions.try_emplace("supportsdolbyvision", SupportsDolbyVision);
+diff --git a/xbmc/windowing/WinSystem.h b/xbmc/windowing/WinSystem.h
+index 7025273635..0d0fe01c04 100644
+--- a/xbmc/windowing/WinSystem.h
++++ b/xbmc/windowing/WinSystem.h
+@@ -22,6 +22,8 @@
+ #include <string>
+ #include <vector>
+ 
++inline constexpr const char* OUTPUT_NAME_DEFAULT = "Default";
++
+ struct RESOLUTION_WHR
+ {
+   // user-defined ctor required for XCode 15.2 and emplace_back
+@@ -279,6 +281,23 @@ public:
+ 
+   virtual std::vector<std::string> GetConnectedOutputs() { return {}; }
+ 
++  /*!
++    * \brief Returns the number of physical monitors/outputs.
++    *
++    * Every backend's GetConnectedOutputs() includes OUTPUT_NAME_DEFAULT as
++    * the first entry; this is a placeholder (not a physical display) that
++    * means "let the system choose". This method excludes that placeholder
++    * from the count.
++    *
++    * \return Number of physical monitors/outputs.
++    */
++  virtual size_t GetPhysicalOutputCount()
++  {
++    const auto outputs = GetConnectedOutputs();
++    return (!outputs.empty() && outputs[0] == OUTPUT_NAME_DEFAULT) ? outputs.size() - 1
++                                                                   : outputs.size();
++  }
++
+   /*!
+    * \brief Return true when HDR display is available and enabled in settings
+    *
+diff --git a/xbmc/windowing/X11/WinSystemX11.cpp b/xbmc/windowing/X11/WinSystemX11.cpp
+index dfcf2b21f5..7dd2526323 100644
+--- a/xbmc/windowing/X11/WinSystemX11.cpp
++++ b/xbmc/windowing/X11/WinSystemX11.cpp
+@@ -140,7 +140,7 @@ bool CWinSystemX11::ResizeWindow(int newWidth, int newHeight, int newLeft, int n
+ {
+   m_userOutput = CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_VIDEOSCREEN_MONITOR);
+   XOutput *out = NULL;
+-  if (m_userOutput.compare("Default") != 0)
++  if (m_userOutput.compare(OUTPUT_NAME_DEFAULT) != 0)
+   {
+     out = g_xrandr.GetOutput(m_userOutput);
+     if (out)
+@@ -178,7 +178,7 @@ void CWinSystemX11::FinishWindowResize(int newWidth, int newHeight)
+ {
+   m_userOutput = CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_VIDEOSCREEN_MONITOR);
+   XOutput *out = NULL;
+-  if (m_userOutput.compare("Default") != 0)
++  if (m_userOutput.compare(OUTPUT_NAME_DEFAULT) != 0)
+   {
+     out = g_xrandr.GetOutput(m_userOutput);
+     if (out)
+@@ -311,13 +311,13 @@ void CWinSystemX11::UpdateResolutions()
+   const std::shared_ptr<CSettings> settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+   bool switchOnOff = settings->GetBool(CSettings::SETTING_VIDEOSCREEN_BLANKDISPLAYS);
+   m_userOutput = settings->GetString(CSettings::SETTING_VIDEOSCREEN_MONITOR);
+-  if (m_userOutput.compare("Default") == 0)
++  if (m_userOutput.compare(OUTPUT_NAME_DEFAULT) == 0)
+     switchOnOff = false;
+ 
+   if(g_xrandr.Query(true, !switchOnOff))
+   {
+     XOutput *out = NULL;
+-    if (m_userOutput.compare("Default") != 0)
++    if (m_userOutput.compare(OUTPUT_NAME_DEFAULT) != 0)
+     {
+       out = g_xrandr.GetOutput(m_userOutput);
+       if (out)
+@@ -470,7 +470,7 @@ std::vector<std::string> CWinSystemX11::GetConnectedOutputs()
+   std::vector<XOutput> outs;
+   g_xrandr.Query(true);
+   outs = g_xrandr.GetModes();
+-  outputs.emplace_back("Default");
++  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
+   for(unsigned int i=0; i<outs.size(); ++i)
+   {
+     outputs.emplace_back(outs[i].name);
+@@ -481,7 +481,8 @@ std::vector<std::string> CWinSystemX11::GetConnectedOutputs()
+ 
+ bool CWinSystemX11::IsCurrentOutput(const std::string& output)
+ {
+-  return (StringUtils::EqualsNoCase(output, "Default")) || (m_currentOutput.compare(output.c_str()) == 0);
++  return (StringUtils::EqualsNoCase(output, OUTPUT_NAME_DEFAULT)) ||
++         (m_currentOutput.compare(output.c_str()) == 0);
+ }
+ 
+ void CWinSystemX11::ShowOSMouse(bool show)
+diff --git a/xbmc/windowing/gbm/WinSystemGbm.cpp b/xbmc/windowing/gbm/WinSystemGbm.cpp
+index 3db001ad3c..c6c851e01c 100644
+--- a/xbmc/windowing/gbm/WinSystemGbm.cpp
++++ b/xbmc/windowing/gbm/WinSystemGbm.cpp
+@@ -370,7 +370,13 @@ std::unique_ptr<CVideoSync> CWinSystemGbm::GetVideoSync(CVideoReferenceClock* cl
+ 
+ std::vector<std::string> CWinSystemGbm::GetConnectedOutputs()
+ {
+-  return m_DRM->GetConnectedConnectorNames();
++  std::vector<std::string> outputs;
++  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
++  for (const auto& name : m_DRM->GetConnectedConnectorNames())
++  {
++    outputs.emplace_back(name);
++  }
++  return outputs;
+ }
+ 
+ bool CWinSystemGbm::SetVideoOutput(const VideoPicture* videoPicture)
+diff --git a/xbmc/windowing/ios/WinSystemIOS.mm b/xbmc/windowing/ios/WinSystemIOS.mm
+index 122263dd04..0a749d7212 100644
+--- a/xbmc/windowing/ios/WinSystemIOS.mm
++++ b/xbmc/windowing/ios/WinSystemIOS.mm
+@@ -475,7 +475,7 @@ CVEAGLContext CWinSystemIOS::GetEAGLContextObj()
+ std::vector<std::string> CWinSystemIOS::GetConnectedOutputs()
+ {
+   std::vector<std::string> outputs;
+-  outputs.emplace_back("Default");
++  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
+   outputs.emplace_back(CONST_TOUCHSCREEN);
+   if ([[UIScreen screens] count] > 1)
+   {
+diff --git a/xbmc/windowing/osx/WinSystemOSX.mm b/xbmc/windowing/osx/WinSystemOSX.mm
+index 0025b0f543..ceb6c90faa 100644
+--- a/xbmc/windowing/osx/WinSystemOSX.mm
++++ b/xbmc/windowing/osx/WinSystemOSX.mm
+@@ -53,7 +53,6 @@ using namespace std::chrono_literals;
+ namespace
+ {
+ constexpr int MAX_DISPLAYS = 32;
+-constexpr const char* DEFAULT_SCREEN_NAME = "Default";
+ } // namespace
+ 
+ static std::array<NSWindowController*, MAX_DISPLAYS> blankingWindowControllers;
+@@ -172,12 +171,6 @@ EdgeInsets GetScreenEdgeInsets(NSUInteger screenIdx)
+ 
+ NSString* screenNameForDisplay(NSUInteger screenIdx)
+ {
+-  // screen id 0 is always called "Default"
+-  if (screenIdx == 0)
+-  {
+-    return @(DEFAULT_SCREEN_NAME);
+-  }
+-
+   const CGDirectDisplayID displayID = GetDisplayID(screenIdx);
+   NSString* screenName = GetScreenName(screenIdx);
+ 
+@@ -1334,18 +1327,12 @@ std::unique_ptr<CVideoSync> CWinSystemOSX::GetVideoSync(CVideoReferenceClock* cl
+ std::vector<std::string> CWinSystemOSX::GetConnectedOutputs()
+ {
+   std::vector<std::string> outputs;
+-  outputs.emplace_back(DEFAULT_SCREEN_NAME);
++  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
+ 
+-  // screen 0 is always the "Default" setting, avoid duplicating the available
+-  // screens here.
+   const NSUInteger numDisplays = NSScreen.screens.count;
+-  if (numDisplays > 1)
++  for (NSUInteger disp = 0; disp < numDisplays; disp++)
+   {
+-    for (NSUInteger disp = 1; disp <= numDisplays - 1; disp++)
+-    {
+-      NSString* const dispName = screenNameForDisplay(disp);
+-      outputs.emplace_back(dispName.UTF8String);
+-    }
++    outputs.emplace_back(screenNameForDisplay(disp).UTF8String);
+   }
+ 
+   return outputs;
+diff --git a/xbmc/windowing/tvos/WinSystemTVOS.mm b/xbmc/windowing/tvos/WinSystemTVOS.mm
+index a4b5ae8da4..bb87922f90 100644
+--- a/xbmc/windowing/tvos/WinSystemTVOS.mm
++++ b/xbmc/windowing/tvos/WinSystemTVOS.mm
+@@ -441,7 +441,7 @@ CVEAGLContext CWinSystemTVOS::GetEAGLContextObj()
+ std::vector<std::string> CWinSystemTVOS::GetConnectedOutputs()
+ {
+   std::vector<std::string> outputs;
+-  outputs.emplace_back("Default");
++  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
+   outputs.emplace_back(CONST_HDMI);
+ 
+   return outputs;
+diff --git a/xbmc/windowing/wayland/WinSystemWayland.cpp b/xbmc/windowing/wayland/WinSystemWayland.cpp
+index e613534cce..413271d1a0 100644
+--- a/xbmc/windowing/wayland/WinSystemWayland.cpp
++++ b/xbmc/windowing/wayland/WinSystemWayland.cpp
+@@ -444,6 +444,7 @@ std::vector<std::string> CWinSystemWayland::GetConnectedOutputs()
+ {
+   std::unique_lock lock(m_outputsMutex);
+   std::vector<std::string> outputs;
++  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
+   std::ranges::transform(m_outputs, std::back_inserter(outputs),
+                          [this](decltype(m_outputs)::value_type const& pair)
+                          { return UserFriendlyOutputName(pair.second); });
+diff --git a/xbmc/windowing/windows/WinSystemWin32.cpp b/xbmc/windowing/windows/WinSystemWin32.cpp
+index bf14c21ef5..05b5f000b6 100644
+--- a/xbmc/windowing/windows/WinSystemWin32.cpp
++++ b/xbmc/windowing/windows/WinSystemWin32.cpp
+@@ -721,6 +721,7 @@ void CWinSystemWin32::SetMinimized(bool minimized)
+ std::vector<std::string> CWinSystemWin32::GetConnectedOutputs()
+ {
+   std::vector<std::string> outputs;
++  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
+ 
+   for (auto& display : m_displays)
+   {
