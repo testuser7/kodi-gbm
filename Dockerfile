@@ -69,11 +69,9 @@ ENV CCACHE_DIR=/var/cache/ccache
 ENV CMAKE_INSTALL_DO_STRIP=1
 
 COPY disable_power_menu.patch .
-COPY gbm_win.patch .
 
 RUN git clone --branch ${KODI_VERSION}-${KODI_NAME} --depth 1 https://github.com/xbmc/xbmc.git kodi && \
-    git -C kodi apply ../disable_power_menu.patch && \
-    git -C kodi apply ../gbm_win.patch
+    git -C kodi apply ../disable_power_menu.patch
 
 
 WORKDIR /home/builder/kodi-build
