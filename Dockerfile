@@ -11,6 +11,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     automake \
     autopoint \
     build-essential \
+    bison \
     ccache \
     cmake \
     default-jre \
@@ -56,7 +57,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     nasm \
     nlohmann-json3-dev \
     python3-dev \
-    swig \
     unzip \
     zip && \
     useradd -m builder
