@@ -89,6 +89,7 @@ RUN --mount=type=cache,target=/var/cache/kodi-download,uid=1000,gid=1000 \
         -DENABLE_INTERNAL_FFMPEG=ON \
         -DENABLE_INTERNAL_CROSSGUID=ON \
         -DENABLE_INTERNAL_FLATBUFFERS=ON \
+        -DENABLE_INTERNAL_SWIG=ON \
         -DENABLE_AIRTUNES=OFF \
         -DENABLE_ALSA=ON \
         -DENABLE_AVAHI=OFF \
