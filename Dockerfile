@@ -1,5 +1,6 @@
 FROM debian:trixie AS builder
 
+ARG BUILDKIT_SBOM_SCAN_STAGE=false
 ARG KODI_VERSION
 ARG KODI_NAME
 
